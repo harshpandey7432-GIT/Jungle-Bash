@@ -1,0 +1,661 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jungle Dash</title>
+
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  background: #071c19;
+  color: white;
+  overflow: hidden;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.hud {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  font-weight: bold;
+  text-shadow: 0 2px 8px black;
+}
+
+.hud h2 {
+  color: #ffd166;
+  letter-spacing: 2px;
+}
+
+#stats {
+  text-align: right;
+  line-height: 1.8;
+}
+
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #00150c88;
+  padding: 15px;
+}
+
+.card {
+  background: #0b2925;
+  border: 1px solid #66e6a0;
+  border-radius: 22px;
+  padding: 30px 24px;
+  text-align: center;
+  width: min(420px, 95vw);
+  box-shadow: 0 0 40px #00ff9940;
+}
+
+.card h1 {
+  font-size: clamp(35px, 8vw, 55px);
+  margin: 12px 0;
+  color: #ffd166;
+}
+
+.card p {
+  line-height: 1.7;
+  color: #d5e8dd;
+  margin: 15px 0;
+}
+
+button {
+  background: linear-gradient(90deg, #ffd166, #ff9f43);
+  border: none;
+  border-radius: 12px;
+  padding: 14px 24px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+button:hover {
+  transform: scale(1.04);
+}
+
+.hidden {
+  display: none;
+}
+
+#hint {
+  position: absolute;
+  bottom: 15px;
+  width: 100%;
+  text-align: center;
+  color: white;
+  font-size: 12px;
+  text-shadow: 0 2px 5px black;
+  pointer-events: none;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game"></canvas>
+
+<div class="hud">
+  <h2>🌴 JUNGLE DASH</h2>
+  <div id="stats">
+    DISTANCE: <span id="distance">0</span> m<br>
+    🪙 COINS: <span id="coins">0</span>
+  </div>
+</div>
+
+<div class="panel" id="startPanel">
+  <div class="card">
+    <div>🏃 ENDLESS RUNNER</div>
+    <h1>JUNGLE<br>DASH</h1>
+    <p>
+      Run through the jungle!<br>
+      Dodge rocks, jump over logs,<br>
+      slide under gates and collect coins.
+    </p>
+    <button id="startBtn">▶ START GAME</button>
+    <p>
+      ← → Move lanes<br>
+      ↑ / SPACE Jump<br>
+      ↓ Slide
+    </p>
+    <small>Mobile: Swipe in any direction</small>
+  </div>
+</div>
+
+<div class="panel hidden" id="overPanel">
+  <div class="card">
+    <h1>GAME OVER!</h1>
+    <p id="result"></p>
+    <button id="restartBtn">↻ PLAY AGAIN</button>
+  </div>
+</div>
+
+<div id="hint">USE ARROW KEYS OR SWIPE TO MOVE</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let W, H, running = false;
+let lastTime = 0;
+let distance = 0;
+let coins = 0;
+let speed = 0.34;
+let spawnTimer = 0;
+let objects = [];
+let elapsed = 0;
+
+let player = {
+  lane: 1,
+  x: 1,
+  jump: 0,
+  vy: 0,
+  slide: 0
+};
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+function laneX(lane, depth = 1) {
+  const spread = W * (0.07 + depth * 0.30);
+  return W / 2 + (lane - 1) * spread;
+}
+
+function rounded(x, y, w, h, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fill();
+}
+
+function drawBackground() {
+  // Sky
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#173d51");
+  sky.addColorStop(0.4, "#42846b");
+  sky.addColorStop(1, "#b4a36a");
+
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // Sun
+  ctx.fillStyle = "#ffdb83";
+  ctx.beginPath();
+  ctx.arc(W * 0.78, H * 0.19, 35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Jungle hills
+  for (let layer = 0; layer < 3; layer++) {
+    ctx.fillStyle = ["#27694f", "#164c3b", "#0a3028"][layer];
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.34);
+
+    for (let x = 0; x <= W; x += 15) {
+      let y = H * (0.35 + layer * 0.06)
+        + Math.sin(x * 0.012 + layer) * H * 0.03;
+      ctx.lineTo(x, y);
+    }
+
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Jungle trees
+  for (let side = 0; side < 2; side++) {
+    for (let i = 0; i < 8; i++) {
+      const x = side === 0
+        ? i * W * 0.045
+        : W - i * W * 0.045;
+
+      const y = H * 0.40;
+      const s = 0.6 + i * 0.07;
+
+      ctx.fillStyle = "#092a23";
+      ctx.fillRect(x - 4, y, 8, H * 0.3 * s);
+
+      ctx.beginPath();
+      ctx.moveTo(x, y - 75 * s);
+      ctx.lineTo(x - 38 * s, y + 5);
+      ctx.lineTo(x + 38 * s, y + 5);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(x, y - 45 * s);
+      ctx.lineTo(x - 50 * s, y + 35);
+      ctx.lineTo(x + 50 * s, y + 35);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Perspective track
+  ctx.fillStyle = "#8e8060";
+  ctx.beginPath();
+  ctx.moveTo(W * 0.43, H * 0.27);
+  ctx.lineTo(W * 0.57, H * 0.27);
+  ctx.lineTo(W * 1.05, H);
+  ctx.lineTo(-W * 0.05, H);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "#504d3c";
+  ctx.beginPath();
+  ctx.moveTo(W * 0.46, H * 0.27);
+  ctx.lineTo(W * 0.54, H * 0.27);
+  ctx.lineTo(W * 0.86, H);
+  ctx.lineTo(W * 0.14, H);
+  ctx.closePath();
+  ctx.fill();
+
+  // Lane markings
+  ctx.strokeStyle = "#e7d9a477";
+  ctx.lineWidth = 2;
+
+  for (const lane of [-0.5, 0.5]) {
+    ctx.beginPath();
+    ctx.moveTo(W / 2 + lane * W * 0.07, H * 0.27);
+    ctx.lineTo(W / 2 + lane * W * 0.36, H);
+    ctx.stroke();
+  }
+}
+
+function drawPlayer() {
+  const x = laneX(player.x);
+  const ground = H * 0.83 - player.jump * H * 0.25;
+
+  ctx.save();
+  ctx.translate(x, ground);
+
+  // Shadow
+  ctx.fillStyle = "#00140e88";
+  ctx.beginPath();
+  ctx.ellipse(0, 5, 25, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (player.slide > 0) {
+    ctx.rotate(-0.12);
+    rounded(-28, -28, 56, 24, 10, "#ed633d");
+    rounded(-22, -7, 22, 9, 4, "#202d32");
+    rounded(10, -7, 22, 9, 4, "#202d32");
+  } else {
+    // Legs
+    ctx.strokeStyle = "#202d32";
+    ctx.lineWidth = 10;
+    ctx.lineCap = "round";
+
+    ctx.beginPath();
+    ctx.moveTo(-8, -27);
+    ctx.lineTo(-12, -3);
+    ctx.moveTo(8, -27);
+    ctx.lineTo(12, -3);
+    ctx.stroke();
+
+    // Body
+    rounded(-20, -59, 40, 36, 8, "#ed633d");
+
+    // Backpack
+    rounded(12, -54, 12, 22, 4, "#277767");
+
+    // Arms
+    ctx.strokeStyle = "#d99a69";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(-17, -51);
+    ctx.lineTo(-27, -33);
+    ctx.moveTo(17, -51);
+    ctx.lineTo(27, -34);
+    ctx.stroke();
+
+    // Head
+    ctx.fillStyle = "#c8895b";
+    ctx.beginPath();
+    ctx.arc(0, -73, 15, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hair
+    ctx.fillStyle = "#18251e";
+    ctx.beginPath();
+    ctx.arc(0, -78, 15, Math.PI, Math.PI * 2);
+    ctx.fill();
+
+    rounded(-14, -77, 28, 5, 2, "#ffd166");
+
+    ctx.fillStyle = "#15201b";
+    ctx.fillRect(-6, -73, 3, 3);
+    ctx.fillRect(4, -73, 3, 3);
+  }
+
+  ctx.restore();
+}
+
+function drawObject(o) {
+  const t = o.z;
+  const x = laneX(o.lane, t);
+  const y = H * 0.27 + t * t * H * 0.72;
+  const s = 0.2 + t * 1.2;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+
+  if (o.type === "coin") {
+    ctx.fillStyle = "#ffbd38";
+    ctx.strokeStyle = "#fff0a0";
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    ctx.ellipse(0, -24, 13, 17, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#fff5bd";
+    ctx.font = "bold 16px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("$", 0, -19);
+  }
+
+  if (o.type === "rock") {
+    ctx.fillStyle = "#67564a";
+    ctx.strokeStyle = "#a99a79";
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    ctx.moveTo(-28, 0);
+    ctx.lineTo(-23, -30);
+    ctx.lineTo(-5, -46);
+    ctx.lineTo(20, -34);
+    ctx.lineTo(29, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  if (o.type === "log") {
+    rounded(-42, -28, 84, 28, 10, "#98572f");
+    ctx.strokeStyle = "#d7a064";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-38, -26, 76, 22);
+  }
+
+  if (o.type === "gate") {
+    ctx.fillStyle = "#c78a4e";
+    ctx.fillRect(-40, -100, 12, 100);
+    ctx.fillRect(28, -100, 12, 100);
+    ctx.fillRect(-40, -100, 80, 15);
+    ctx.fillStyle = "#513522";
+    ctx.fillRect(-20, -98, 6, 10);
+    ctx.fillRect(5, -98, 6, 10);
+  }
+
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+
+  objects
+    .slice()
+    .sort((a, b) => a.z - b.z)
+    .forEach(drawObject);
+
+  drawPlayer();
+}
+
+function spawn() {
+  const lane = Math.floor(Math.random() * 3);
+  const r = Math.random();
+
+  if (r < 0.32) {
+    for (let i = 0; i < 4; i++) {
+      objects.push({
+        type: "coin",
+        lane,
+        z: -0.02 - i * 0.09,
+        done: false
+      });
+    }
+  } else {
+    const type = r < 0.56 ? "rock"
+      : r < 0.79 ? "log" : "gate";
+
+    objects.push({
+      type,
+      lane,
+      z: 0,
+      done: false
+    });
+  }
+}
+
+function startGame() {
+  running = true;
+  distance = 0;
+  coins = 0;
+  speed = 0.34;
+  elapsed = 0;
+  spawnTimer = 0.3;
+  objects = [];
+
+  player = {
+    lane: 1,
+    x: 1,
+    jump: 0,
+    vy: 0,
+    slide: 0
+  };
+
+  document.getElementById("startPanel").classList.add("hidden");
+  document.getElementById("overPanel").classList.add("hidden");
+
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+}
+
+function gameOver() {
+  running = false;
+
+  document.getElementById("result").textContent =
+    "Distance: " + Math.floor(distance) +
+    " metres | Coins collected: " + coins;
+
+  document.getElementById("overPanel").classList.remove("hidden");
+}
+
+function move(action) {
+  if (!running) return;
+
+  if (action === "left") {
+    player.lane = Math.max(0, player.lane - 1);
+  }
+
+  if (action === "right") {
+    player.lane = Math.min(2, player.lane + 1);
+  }
+
+  if (action === "jump" && player.jump === 0 &&
+      player.slide <= 0) {
+    player.vy = 1.25;
+  }
+
+  if (action === "slide" && player.jump === 0) {
+    player.slide = 0.7;
+  }
+}
+
+function loop(now) {
+  if (!running) return;
+
+  const dt = Math.min((now - lastTime) / 1000, 0.035);
+  lastTime = now;
+
+  elapsed += dt;
+  distance += dt * 30;
+  speed = Math.min(0.7, speed + dt * 0.002);
+
+  // Smooth lane movement
+  player.x += (player.lane - player.x) *
+    Math.min(1, dt * 12);
+
+  // Jump physics
+  if (player.vy !== 0 || player.jump > 0) {
+    player.jump += player.vy * dt * 2.5;
+    player.vy -= dt * 3.2;
+
+    if (player.jump <= 0) {
+      player.jump = 0;
+      player.vy = 0;
+    }
+  }
+
+  // Slide timer
+  player.slide = Math.max(0, player.slide - dt);
+
+  // Spawn objects
+  spawnTimer -= dt;
+
+  if (spawnTimer <= 0) {
+    spawn();
+    spawnTimer = Math.max(0.5, 1 - distance / 2500);
+  }
+
+  // Move objects towards player
+  for (const o of objects) {
+    o.z += dt * speed;
+  }
+
+  // Collision detection
+  for (const o of objects) {
+    if (o.done || o.z < 0.84 || o.z > 0.99) continue;
+
+    if (Math.abs(player.x - o.lane) > 0.32) continue;
+
+    if (o.type === "coin") {
+      coins++;
+      o.done = true;
+      continue;
+    }
+
+    const safe =
+      (o.type === "rock" && player.jump > 0.25) ||
+      (o.type === "log" && player.jump > 0.20) ||
+      (o.type === "gate" && player.slide > 0.2);
+
+    o.done = true;
+
+    if (!safe) {
+      gameOver();
+      draw();
+      return;
+    }
+  }
+
+  objects = objects.filter(o => o.z < 1.1 && !o.done);
+
+  document.getElementById("distance").textContent =
+    Math.floor(distance);
+
+  document.getElementById("coins").textContent = coins;
+
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// Keyboard controls
+window.addEventListener("keydown", e => {
+  const keys = [
+    "ArrowLeft", "ArrowRight",
+    "ArrowUp", "ArrowDown", " "
+  ];
+
+  if (keys.includes(e.key)) e.preventDefault();
+
+  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a")
+    move("left");
+
+  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d")
+    move("right");
+
+  if (e.key === "ArrowUp" || e.key === " " ||
+      e.key.toLowerCase() === "w")
+    move("jump");
+
+  if (e.key === "ArrowDown" || e.key.toLowerCase() === "s")
+    move("slide");
+}, { passive: false });
+
+// Mobile swipe controls
+let touchStart = null;
+
+canvas.addEventListener("touchstart", e => {
+  const t = e.changedTouches[0];
+  touchStart = { x: t.clientX, y: t.clientY };
+}, { passive: true });
+
+canvas.addEventListener("touchend", e => {
+  if (!touchStart) return;
+
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStart.x;
+  const dy = t.clientY - touchStart.y;
+
+  if (Math.max(Math.abs(dx), Math.abs(dy)) > 25) {
+    if (Math.abs(dx) > Math.abs(dy)) {
+      move(dx > 0 ? "right" : "left");
+    } else {
+      move(dy < 0 ? "jump" : "slide");
+    }
+  }
+
+  touchStart = null;
+}, { passive: true });
+
+document.getElementById("startBtn")
+  .addEventListener("click", startGame);
+
+document.getElementById("restartBtn")
+  .addEventListener("click", startGame);
+
+// Initial scene
+draw();
+</script>
+
+</body>
+</html>
